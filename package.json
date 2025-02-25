@@ -1,0 +1,31 @@
+{
+  "name": "fastchain-testnet",
+  "version": "1.0.0",
+  "description": "A fast, simple blockchain testnet for development and testing purposes",
+  "main": "testnet.js",
+  "scripts": {
+    "start": "node testnet.js",
+    "dev": "nodemon testnet.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "blockchain",
+    "testnet",
+    "cryptocurrency",
+    "solana",
+    "web3",
+    "testing"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "body-parser": "^1.20.2",
+    "cors": "^2.8.5",
+    "crypto": "^1.0.1",
+    "elliptic": "^6.5.4",
+    "express": "^4.18.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+}
