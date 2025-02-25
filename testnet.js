@@ -224,6 +224,11 @@ const testFaucet = {
 // API Endpoints
 
 // Create a new wallet
+
+app.get('/', (req, res) => {
+    res.send('<h1>Alive</h1>');
+});
+
 app.get('/api/create-wallet', (req, res) => {
   const key = ec.genKeyPair();
   const publicKey = key.getPublic('hex');
