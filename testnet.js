@@ -1,3 +1,5 @@
+require('./alive);
+
 // Simple Testnet Blockchain Implementation
 // This implementation uses Node.js with Express for the API
 
