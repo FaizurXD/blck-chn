@@ -1,6 +1,6 @@
 const axios = require('axios');
 
-const URL = 'https://faizur.onrender.com/api/blockchain'; // Replace with your actual URL
+const URL = 'https://faizur-s6l3.onrender.com'; // Replace with your actual URL
 
 function pingServer() {
     axios.get(URL)
