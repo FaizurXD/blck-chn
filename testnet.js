@@ -1,13 +1,9 @@
-require('./alive.js');
-
-// Simple Testnet Blockchain Implementation
-// This implementation uses Node.js with Express for the API
-
+require('./alive');
 const crypto = require('crypto');
 const express = require('express');
 const bodyParser = require('body-parser');
 const EC = require('elliptic').ec;
-const ec = new EC('secp256k1'); // Same elliptic curve used by Bitcoin
+const ec = new EC('secp256k1');
 const app = express();
 const PORT = 3000;
 
@@ -22,6 +18,7 @@ class Transaction {
     this.amount = amount;
     this.timestamp = Date.now();
     this.signature = null;
+    this.transactionId = crypto.randomBytes(32).toString('hex');
   }
 
   // Calculate hash for the transaction
@@ -33,6 +30,9 @@ class Transaction {
 
   // Sign the transaction
   signTransaction(signingKey) {
+    // Skip signature check for faucet (null fromAddress)
+    if (this.fromAddress === null) return;
+    
     // You can only send from your own wallet
     if (signingKey.getPublic('hex') !== this.fromAddress) {
       throw new Error('You cannot sign transactions for other wallets!');
@@ -45,7 +45,7 @@ class Transaction {
 
   // Verify transaction signature
   isValid() {
-    // Special case for mining rewards
+    // Special case for system transactions (like faucet or rewards)
     if (this.fromAddress === null) return true;
 
     if (!this.signature || this.signature.length === 0) {
@@ -63,26 +63,15 @@ class Block {
     this.transactions = transactions;
     this.previousHash = previousHash;
     this.hash = this.calculateHash();
-    this.nonce = 0;
+    this.slot = Date.now(); // Solana-like slot number (timestamp)
+    this.validator = 'system'; // In this simplified model, all blocks are validated by the system
   }
 
   // Calculate hash of the block
   calculateHash() {
     return crypto.createHash('sha256')
-      .update(this.previousHash + this.timestamp + JSON.stringify(this.transactions) + this.nonce)
+      .update(this.previousHash + this.timestamp + JSON.stringify(this.transactions) + this.slot)
       .digest('hex');
-  }
-
-  // Proof of work (simplified)
-  mineBlock(difficulty) {
-    const target = Array(difficulty + 1).join('0');
-    
-    while (this.hash.substring(0, difficulty) !== target) {
-      this.nonce++;
-      this.hash = this.calculateHash();
-    }
-
-    console.log(`Block mined: ${this.hash}`);
   }
 
   // Validate all transactions in the block
@@ -99,10 +88,19 @@ class Block {
 class Blockchain {
   constructor() {
     this.chain = [this.createGenesisBlock()];
-    this.difficulty = 2; // Determines how long it takes to mine a block
     this.pendingTransactions = [];
-    this.miningReward = 100;
-    this.transactionsPerBlock = 5; // Similar to Solana's high throughput
+    this.transactionsPerBlock = 20; // Higher throughput like Solana
+    this.validatorReward = 10; // Smaller reward since validation is automatic
+    this.autoValidationInterval = 2000; // Auto-validate every 2 seconds (configurable)
+    this.faucetKeyPair = ec.genKeyPair(); // Generate a dedicated key for the faucet
+    this.faucetAddress = this.faucetKeyPair.getPublic('hex');
+    
+    // Initialize faucet with funds in genesis
+    const faucetTx = new Transaction(null, this.faucetAddress, 10000000);
+    this.pendingTransactions.push(faucetTx);
+    
+    // Start automatic validation (Solana-like)
+    this.startAutoValidation();
   }
 
   // Create the first block
@@ -115,42 +113,57 @@ class Blockchain {
     return this.chain[this.chain.length - 1];
   }
 
-  // Mining rewards and adding new blocks
-  minePendingTransactions(miningRewardAddress) {
-    // Instead of mining just one transaction, mine as many as possible (batching)
-    const transactionsToMine = this.pendingTransactions.slice(0, this.transactionsPerBlock);
+  // Auto-validate transactions periodically (Solana-like)
+  startAutoValidation() {
+    setInterval(() => {
+      this.validatePendingTransactions();
+    }, this.autoValidationInterval);
+  }
+
+  // Validate pending transactions and add them to the blockchain
+  validatePendingTransactions() {
+    // Skip if no pending transactions
+    if (this.pendingTransactions.length === 0) return;
     
-    // Create a new block with the pending transactions
-    const block = new Block(Date.now(), transactionsToMine, this.getLatestBlock().hash);
+    // Get transactions to include in the current block
+    const transactionsToValidate = this.pendingTransactions.slice(0, this.transactionsPerBlock);
     
-    // Mine the block (simplified)
-    block.mineBlock(this.difficulty);
+    // Create new block
+    const block = new Block(Date.now(), transactionsToValidate, this.getLatestBlock().hash);
     
-    console.log('Block successfully mined!');
+    // Add block to chain
     this.chain.push(block);
     
-    // Update the pending transactions (remove the ones that were just mined)
+    // Remove processed transactions from pending
     this.pendingTransactions = this.pendingTransactions.slice(this.transactionsPerBlock);
     
-    // Add the mining reward transaction
-    this.pendingTransactions.unshift(
-      new Transaction(null, miningRewardAddress, this.miningReward)
-    );
+    console.log(`Block validated: ${block.hash} | Transactions: ${transactionsToValidate.length}`);
   }
 
   // Add a new transaction
   addTransaction(transaction) {
     // Verify from/to address and signature
-    if (!transaction.fromAddress || !transaction.toAddress) {
-      throw new Error('Transaction must include from and to address');
+    if (!transaction.toAddress) {
+      throw new Error('Transaction must include a destination address');
     }
 
-    if (!transaction.isValid() && transaction.fromAddress !== null) {
+    // Special case for system transactions (faucet, rewards)
+    if (transaction.fromAddress === null) {
+      this.pendingTransactions.push(transaction);
+      return transaction.transactionId;
+    }
+
+    // Normal user transactions
+    if (!transaction.fromAddress) {
+      throw new Error('Transaction must include a sender address');
+    }
+
+    if (!transaction.isValid()) {
       throw new Error('Cannot add invalid transaction to the chain');
     }
 
     this.pendingTransactions.push(transaction);
-    return this.pendingTransactions.length;
+    return transaction.transactionId;
   }
 
   // Get balance of an address
@@ -185,6 +198,37 @@ class Blockchain {
     return balance;
   }
 
+  // Get transaction history for an address
+  getTransactionHistory(address) {
+    const history = [];
+    
+    // Check confirmed transactions
+    for (const block of this.chain) {
+      for (const trans of block.transactions) {
+        if (trans.fromAddress === address || trans.toAddress === address) {
+          history.push({
+            ...trans,
+            status: 'confirmed',
+            blockHash: block.hash,
+            slot: block.slot
+          });
+        }
+      }
+    }
+    
+    // Check pending transactions
+    for (const trans of this.pendingTransactions) {
+      if (trans.fromAddress === address || trans.toAddress === address) {
+        history.push({
+          ...trans,
+          status: 'pending'
+        });
+      }
+    }
+    
+    return history.sort((a, b) => b.timestamp - a.timestamp); // Sort newest first
+  }
+
   // Validate the integrity of the blockchain
   isChainValid() {
     // Check each block
@@ -209,6 +253,35 @@ class Blockchain {
     }
     return true;
   }
+  
+  // Get transaction by ID
+  getTransaction(transactionId) {
+    // Check confirmed transactions
+    for (const block of this.chain) {
+      for (const trans of block.transactions) {
+        if (trans.transactionId === transactionId) {
+          return {
+            ...trans,
+            status: 'confirmed',
+            blockHash: block.hash,
+            slot: block.slot
+          };
+        }
+      }
+    }
+    
+    // Check pending transactions
+    for (const trans of this.pendingTransactions) {
+      if (trans.transactionId === transactionId) {
+        return {
+          ...trans,
+          status: 'pending'
+        };
+      }
+    }
+    
+    return null;
+  }
 }
 
 // Create a new blockchain instance
@@ -216,19 +289,13 @@ const testnetCoin = new Blockchain();
 
 // In-memory wallet storage
 const wallets = {};
-const testFaucet = {
-  address: "faucet_address",
-  balance: 1000000 // Initial faucet balance
-};
 
 // API Endpoints
-
-// Create a new wallet
-
 app.get('/', (req, res) => {
-    res.send('<h1>Alive</h1>');
+    res.send('<h1>SolanaLike Testnet - Running</h1>');
 });
 
+// Create a new wallet
 app.get('/api/create-wallet', (req, res) => {
   const key = ec.genKeyPair();
   const publicKey = key.getPublic('hex');
@@ -236,8 +303,7 @@ app.get('/api/create-wallet', (req, res) => {
   
   wallets[publicKey] = {
     publicKey,
-    privateKey,
-    transactions: []
+    privateKey
   };
   
   res.json({
@@ -253,7 +319,22 @@ app.get('/api/balance/:address', (req, res) => {
   res.json({ address: req.params.address, balance });
 });
 
-// Request tokens from faucet
+// Get transaction history for an address
+app.get('/api/history/:address', (req, res) => {
+  const history = testnetCoin.getTransactionHistory(req.params.address);
+  res.json({ address: req.params.address, transactions: history });
+});
+
+// Get transaction details
+app.get('/api/transaction/:id', (req, res) => {
+  const transaction = testnetCoin.getTransaction(req.params.id);
+  if (!transaction) {
+    return res.status(404).json({ error: "Transaction not found" });
+  }
+  res.json(transaction);
+});
+
+// Request tokens from faucet - FIXED
 app.post('/api/faucet', (req, res) => {
   const { address, amount } = req.body;
   
@@ -267,18 +348,23 @@ app.post('/api/faucet', (req, res) => {
     return res.status(400).json({ error: "Maximum faucet request is 1000 coins" });
   }
   
-  // Create a transaction from faucet to the requested address
-  const tx = new Transaction(null, address, faucetAmount);
-  testnetCoin.addTransaction(tx);
-  
-  // Mine the block to confirm the transaction
-  testnetCoin.minePendingTransactions(testFaucet.address);
-  
-  res.json({ 
-    success: true,
-    message: `${faucetAmount} coins have been sent to ${address}`,
-    newBalance: testnetCoin.getBalanceOfAddress(address)
-  });
+  try {
+    // Create a system transaction (null fromAddress for faucet)
+    const tx = new Transaction(null, address, faucetAmount);
+    
+    // No need to sign system transactions (fixed bug)
+    const txId = testnetCoin.addTransaction(tx);
+    
+    res.json({ 
+      success: true,
+      message: `${faucetAmount} coins will be sent to ${address}`,
+      transactionId: txId,
+      note: "Transaction will be confirmed in the next validation cycle (typically within 2 seconds)"
+    });
+  } catch (error) {
+    console.error("Faucet error:", error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // Make a transaction
@@ -309,18 +395,13 @@ app.post('/api/transaction', (req, res) => {
     tx.signTransaction(signingKey);
     
     // Add transaction to pending
-    testnetCoin.addTransaction(tx);
-    
-    // If there are enough transactions or it's time, mine a block
-    if (testnetCoin.pendingTransactions.length >= testnetCoin.transactionsPerBlock) {
-      testnetCoin.minePendingTransactions(testFaucet.address);
-    }
+    const txId = testnetCoin.addTransaction(tx);
     
     res.json({
       success: true,
-      message: `Transaction of ${amount} coins has been added to the pending transactions`,
-      pendingTransactions: testnetCoin.pendingTransactions.length,
-      transactionHash: tx.calculateHash()
+      message: `Transaction of ${amount} coins has been submitted`,
+      transactionId: txId,
+      note: "Transaction will be confirmed in the next validation cycle (typically within 2 seconds)"
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -329,36 +410,61 @@ app.post('/api/transaction', (req, res) => {
 
 // Get blockchain data
 app.get('/api/blockchain', (req, res) => {
-  res.json(testnetCoin);
+  res.json({
+    chainLength: testnetCoin.chain.length,
+    blocks: testnetCoin.chain.map(block => ({
+      hash: block.hash,
+      slot: block.slot,
+      timestamp: block.timestamp,
+      transactionCount: block.transactions.length
+    }))
+  });
+});
+
+// Get specific block data
+app.get('/api/block/:hash', (req, res) => {
+  const block = testnetCoin.chain.find(b => b.hash === req.params.hash);
+  if (!block) {
+    return res.status(404).json({ error: "Block not found" });
+  }
+  res.json(block);
 });
 
 // Get pending transactions
 app.get('/api/pending-transactions', (req, res) => {
-  res.json(testnetCoin.pendingTransactions);
+  res.json({
+    count: testnetCoin.pendingTransactions.length,
+    transactions: testnetCoin.pendingTransactions.map(tx => ({
+      id: tx.transactionId,
+      from: tx.fromAddress || 'system',
+      to: tx.toAddress,
+      amount: tx.amount,
+      timestamp: tx.timestamp
+    }))
+  });
 });
 
-// Mine pending transactions
-app.post('/api/mine', (req, res) => {
-  const { minerAddress } = req.body;
+// Get blockchain stats
+app.get('/api/stats', (req, res) => {
+  const totalTransactions = testnetCoin.chain.reduce(
+    (sum, block) => sum + block.transactions.length, 0) + 
+    testnetCoin.pendingTransactions.length;
   
-  if (!minerAddress) {
-    return res.status(400).json({ error: "Miner address is required" });
-  }
-  
-  testnetCoin.minePendingTransactions(minerAddress);
+  const latestBlock = testnetCoin.getLatestBlock();
   
   res.json({
-    success: true,
-    message: "Block mined successfully",
-    reward: "You will receive your mining reward in the next block",
-    pendingTransactions: testnetCoin.pendingTransactions.length
+    blocks: testnetCoin.chain.length,
+    transactions: totalTransactions,
+    pendingTransactions: testnetCoin.pendingTransactions.length,
+    latestBlockHash: latestBlock.hash,
+    latestBlockTimestamp: latestBlock.timestamp,
+    autoValidationInterval: testnetCoin.autoValidationInterval,
+    transactionsPerBlock: testnetCoin.transactionsPerBlock
   });
 });
 
 // Start the server
 app.listen(PORT, () => {
   console.log(`Testnet blockchain running on http://localhost:${PORT}`);
-  console.log('Creating genesis block...');
-  // Pre-mine some blocks to make the chain valid
-  testnetCoin.minePendingTransactions(testFaucet.address);
+  console.log('Auto-validation started - transactions will be processed automatically');
 });
