@@ -91,7 +91,7 @@ class Blockchain {
     this.pendingTransactions = [];
     this.transactionsPerBlock = 20; // Higher throughput like Solana
     this.validatorReward = 10; // Smaller reward since validation is automatic
-    this.autoValidationInterval = 2000; // Auto-validate every 2 seconds (configurable)
+    this.autoValidationInterval = 10; // Auto-validate every 2 seconds (configurable)
     this.faucetKeyPair = ec.genKeyPair(); // Generate a dedicated key for the faucet
     this.faucetAddress = this.faucetKeyPair.getPublic('hex');
     
